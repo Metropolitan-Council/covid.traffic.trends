@@ -1,0 +1,60 @@
+#' table UI Function
+#'
+#' @description A shiny Module.
+#'
+#' @param id,input,output,session Internal parameters for {shiny}.
+#'
+#' @noRd
+#'
+#' @importFrom shiny NS tagList
+mod_table_ui <- function(id) {
+  ns <- NS(id)
+  tagList(
+    DT::dataTableOutput(ns("table"), height = "350px")
+  )
+}
+
+#' table Server Function
+#'
+#' @noRd
+mod_table_server <- function(input, output, session) {
+  ns <- session$ns
+
+  output$table <- DT::renderDataTable({
+    DT::datatable(
+      data = table_data,
+      colnames = c(
+        "Date",
+        "Weekday",
+        "District",
+        "Observed total volume",
+        "Predicted total volume",
+        "Percent difference between observed and predicted",
+        "Percent difference 7-day rolling average"
+      ),
+      rownames = FALSE,
+      options = list(dom = "tpl")
+    ) %>%
+      DT::formatDate("date",
+        method = "toDateString"
+      ) %>%
+      DT::formatRound(c(
+        "actual_volume",
+        "predicted_volume"
+      ),
+      digits = 0,
+      interval = 3,
+      mark = ","
+      ) %>%
+      DT::formatRound(
+        "roll_avg",
+        digits = 2
+      )
+  })
+}
+
+## To be copied in the UI
+# mod_table_ui("table_ui_1")
+
+## To be copied in the server
+# callModule(mod_table_server, "table_ui_1")
