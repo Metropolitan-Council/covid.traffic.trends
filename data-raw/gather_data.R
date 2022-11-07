@@ -1,8 +1,10 @@
 ## code to prepare `predicted_actual` and node-level dataset series goes here
 library(covid.traffic.trends)
+library(dplyr)
+
 library(sf)
 library(data.table)
-library(dplyr)
+
 library(DBI)
 library(lubridate)
 # For Database Connection:
@@ -13,38 +15,27 @@ library(odbc)
 
 #Connecting to the SQLdatabase -------------------------------
 library(DBI)
+
 # custom R Script from Liz Roten to connect
-source("_db_connect.R")
-
+source("data-raw/_db_connect.R")
 con <- db_connect()
-## Connect to the Database -----
-connect.string <- "(DESCRIPTION=(ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP)(HOST = fth-exa-scan.mc.local  )(PORT = 1521)))(CONNECT_DATA = (SERVER = DEDICATED)(SERVICE_NAME =  com4te.mc.local)))"
-tbidb <- ROracle::dbConnect(
-  dbDriver("Oracle"),
-  dbname = connect.string,
-  username = "mts_planning_data",
-  # mts_planning_view for viewing data only, no write privileges.
-  # mts_planning_data is the username for write privileges.
-  password = keyring::key_get("mts_planning_data_pw")
-)
-
-# Configure database time zone -------------------------------
-Sys.setenv(TZ = "America/Chicago")
-Sys.setenv(ORA_SDTZ = "America/Chicago")
 
 ## Load Detector Configuration -----
 #### at the sensor (detector) level (most specific) ----
-sensor_config <- read.csv("./data-raw/Configuration of Metro Detectors 2020-03-24.csv") %>%
+sensor_config_raw <- DBI::dbGetQuery(con, "select * from rtmc_configuration")
+
+sensor_config <- sensor_config_raw %>%
+  janitor::clean_names() %>%
   filter(
-    r_node_n_type != "Intersection",
-    r_node_n_type != ""
+    node_n_type != "Intersection",
+    node_n_type != ""
   ) %>%
   mutate(
     corridor_route = stringr::str_replace(stringr::str_replace(stringr::str_replace(stringr::str_replace(corridor_route, "\\.", " "), "\\.", " "), "T H", "TH"), "U S", "US"),
     # scl_volume = scale(predicted_volume, center = F),
     node_type = case_when(
-      r_node_n_type == "Station" ~ "Freeway Segment",
-      TRUE ~ r_node_n_type
+      node_n_type == "Station" ~ "Freeway Segment",
+      TRUE ~ node_n_type
     )
   ) %>%
   select(-date) # download date of configuration file
@@ -61,9 +52,9 @@ node_config <-
     -detector_field,
     -detector_abandoned,
     # extraneous data about the nodes:
-    -r_node_lanes,
-    -r_node_shift,
-    -r_node_attach_side
+    -node_lanes,
+    -node_shift,
+    -node_attach_side
   ) %>%
   # now just get the nodes.
   unique()
@@ -74,7 +65,7 @@ corridors <- nodes %>%
   group_by(corridor_route) %>%
   arrange(r_node_name) %>%
   summarize(do_union = T) %>%
-  st_cast("LINESTRING")
+  sf::st_cast("LINESTRING")
 
 ## Daily Data: By Node -----
 raw_predicted_actual_by_node <-
@@ -82,20 +73,20 @@ raw_predicted_actual_by_node <-
 
 predicted_actual_by_node <- raw_predicted_actual_by_node %>%
   rename(
-    "r_node_name" = "NODE_NAME",
+    "node_name" = "NODE_NAME",
     "date" = "DATA_DATE",
     "actual_volume" = "TOTAL_VOLUME",
     "predicted_volume" = "VOLUME_PREDICT",
     "volume_difference_absolute" = "VOLUME_DIFF"
   ) %>%
   mutate(date := as.Date(date),
-    r_node_id = stringr::str_remove_all(r_node_name, "rnd_")
+    node_id = stringr::str_remove_all(node_name, "rnd_")
   ) %>%
   mutate(volume_difference_percent = (volume_difference_absolute / predicted_volume) * 100) %>%
   left_join(node_config) %>%
   filter(
-    r_node_n_type != "Intersection",
-    r_node_n_type != "",
+    node_n_type != "Intersection",
+    node_n_type != "",
     date >= "2020-03-01"
   ) %>%
   mutate(
@@ -109,9 +100,9 @@ predicted_actual_by_node <- raw_predicted_actual_by_node %>%
       " on ",
       corridor_route,
       " at ",
-      r_node_label,
+      node_label,
       " (Node ",
-      r_node_id,
+      node_id,
       ")",
       "<br>",
       round(volume_difference_percent),
@@ -256,14 +247,14 @@ usethis::use_data(predicted_actual_by_state,
 hr_node_diff <-
   ROracle::dbGetQuery(tbidb, "SELECT * FROM RTMC_HOURLY_NODE_DIFF_MON_NOW") %>%
   rename(
-    "r_node_name" = "NODE_NAME",
+    "node_name" = "NODE_NAME",
     "year" = "DATA_YEAR",
     "month" = "DATA_MONTH",
     "hour" = "DATA_HOUR",
     "actual_volume" = "TOTAL_VOLUME",
     "predicted_volume" = "VOLUME_PREDICT"
   ) %>%
-  left_join(node_config, by = c("r_node_name" = "r_node_name")) %>%
+  left_join(node_config, by = c("node_name" = "node_name")) %>%
   mutate(month_year = paste(month.name[month], year))
 
 
@@ -283,20 +274,20 @@ predicted_actual_node_day_part <- hr_node_diff %>%
       hour >= 16 & hour <= 18 ~ "evening"
     ),
     day_type = "Weekday",
-    r_node_id = stringr::str_remove_all(r_node_name, "rnd_")
+    node_id = stringr::str_remove_all(node_name, "rnd_")
   ) %>%
   filter(
-    r_node_n_type != "Intersection",
-    r_node_n_type != ""
+    node_n_type != "Intersection",
+    node_n_type != ""
   ) %>%
   group_by(
     day_part, day_type, day_part_short, month_year,
-    r_node_lat, r_node_lon,
-    r_node_name, r_node_id, r_node_n_type, r_node_label, corridor_route
+    node_lat, node_lon,
+    node_name, node_id, node_n_type, node_label, corridor_route
   ) %>%
   summarize(across(c(actual_volume, predicted_volume), sum)) %>%
   ungroup() %>%
-  group_by(day_part, r_node_name) %>%
+  group_by(day_part, node_name) %>%
   mutate(
     rollmean_sum = shift(frollapply(actual_volume, 7, mean, align = "right")),
     rollmean_pred = shift(frollapply(predicted_volume, 7, mean, align = "right"))
@@ -312,8 +303,8 @@ predicted_actual_node_day_part <- hr_node_diff %>%
   ) %>%
   mutate(
     node_type = case_when(
-      r_node_n_type == "Station" ~ "Freeway Segment",
-      TRUE ~ r_node_n_type
+      node_n_type == "Station" ~ "Freeway Segment",
+      TRUE ~ node_n_type
     ),
     user_month_year = factor(month_year,
       levels = c(
@@ -373,9 +364,9 @@ predicted_actual_node_day_part <- hr_node_diff %>%
       " on ",
       corridor_route,
       " at ",
-      r_node_label,
+      node_label,
       " (Node ",
-      r_node_id,
+      node_id,
       ")",
       "<br>",
       round(volume_percent_difference * 100, digits = 1),
@@ -449,7 +440,7 @@ usethis::use_data(predicted_actual_corridor_day_part,
 
 # Hourly Data: By Corridor, Aggregated to Hour -----
 predicted_actual_corridor_hour <- hr_node_diff %>%
-  filter(r_node_n_type == "Station") %>%
+  filter(node_n_type == "Station") %>%
   mutate(
     # day_part = case_when(
     #   hour >= 7 & hour <= 9 ~ "Morning, 7-9AM",
