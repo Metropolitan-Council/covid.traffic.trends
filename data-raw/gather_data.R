@@ -1,22 +1,21 @@
 ## code to prepare `predicted_actual` and node-level dataset series goes here
 library(covid.traffic.trends)
 library(dplyr)
-
+library(janitor)
+library(stringr)
+library(zoo)
+library(usethis)
+library(ggplot2)
+library(councilR)
+library(showtext)
+library(DBI)
 library(sf)
 library(data.table)
-
 library(DBI)
 library(lubridate)
-# For Database Connection:
-library(ROracle)
-library(keyring)
-library(ggplot2)
-library(odbc)
+
 
 #Connecting to the SQLdatabase -------------------------------
-library(DBI)
-
-# custom R Script from Liz Roten to connect
 source("data-raw/_db_connect.R")
 con <- db_connect()
 
